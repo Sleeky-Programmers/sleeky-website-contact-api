@@ -2,17 +2,17 @@ import { IsEmail, IsNotEmpty, IsString } from 'class-validator';
 
 export class CreateContactDto {
   @IsString()
-  @IsNotEmpty({ message: 'Enter your first name' })
+  @IsNotEmpty()
   firstName: string;
 
   @IsString()
-  @IsNotEmpty({ message: 'Enter your last name' })
+  @IsNotEmpty()
   lastName: string;
 
   @IsEmail()
   email: string;
 
   @IsString()
-  @IsNotEmpty({ message: 'Write a message' })
+  @IsNotEmpty()
   message: string;
 }

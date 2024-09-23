@@ -25,7 +25,7 @@ export class EmailService {
   ) {
     const mailOptions = {
       from: `"${lastName} ${firstName}" <${email}>`,
-      to: 'sleekyprogrammers@gmail.com',
+      to: 'support@sleekyprogrammers.com',
       subject: 'New Contact Form Submission',
       html: `
         <!DOCTYPE html>
