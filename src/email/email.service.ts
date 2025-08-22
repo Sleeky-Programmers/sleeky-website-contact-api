@@ -25,7 +25,7 @@ export class EmailService {
   ) {
     const mailOptions = {
       from: `"${lastName} ${firstName}" <${email}>`,
-      to: `${process.env.EMAIL_USERNAME}`,
+      to: `${process.env.EMAIL_ADDRESS}`,
       subject: 'New Contact Form Submission',
       html: `
         <!DOCTYPE html>
