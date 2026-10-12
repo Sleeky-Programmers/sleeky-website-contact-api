@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 
 @Injectable()
@@ -54,6 +58,13 @@ export class EmailService {
     phone: string,
     message: string,
   ) {
+    if (!process.env.EMAIL_ADDRESS) {
+      console.error('EMAIL_ADDRESS environment variable is not set');
+      throw new InternalServerErrorException([
+        'Unable to send message right now, please try again later',
+      ]);
+    }
+
     const mailOptions = {
       from: `"${lastName} ${firstName}" <${email}>`,
       to: `${process.env.EMAIL_ADDRESS}`,
