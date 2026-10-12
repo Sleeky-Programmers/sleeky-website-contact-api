@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 
 @Injectable()
@@ -17,10 +17,41 @@ export class EmailService {
     });
   }
 
+  async verifyCaptcha(token: string, remoteIp?: string) {
+    const params = new URLSearchParams({
+      secret: `${process.env.RECAPTCHA_SECRET_KEY}`,
+      response: token,
+    });
+
+    if (remoteIp) {
+      params.append('remoteip', remoteIp);
+    }
+
+    let success = false;
+
+    try {
+      const response = await fetch(
+        'https://www.google.com/recaptcha/api/siteverify',
+        { method: 'POST', body: params },
+      );
+      const data = await response.json();
+      success = data.success === true;
+    } catch {
+      success = false;
+    }
+
+    if (!success) {
+      throw new BadRequestException([
+        'Captcha verification failed, please try again',
+      ]);
+    }
+  }
+
   async sendContactEmail(
     firstName: string,
     lastName: string,
     email: string,
+    phone: string,
     message: string,
   ) {
     const mailOptions = {
@@ -89,6 +120,7 @@ export class EmailService {
                     <p><strong>First Name:</strong> ${firstName}</p>
                     <p><strong>Last Name:</strong> ${lastName}</p>
                     <p><strong>Email:</strong> ${email}</p>
+                    <p><strong>Phone Number:</strong> ${phone}</p>
                     <p><strong>Message:</strong></p>
                     <p>${message}</p>
                 </div>

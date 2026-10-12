@@ -1,18 +1,29 @@
-import { IsEmail, IsNotEmpty, IsString } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, Matches } from 'class-validator';
 
 export class CreateContactDto {
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'First name is required' })
   firstName: string;
 
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'Last name is required' })
   lastName: string;
 
-  @IsEmail()
+  @IsNotEmpty({ message: 'Email address is required' })
+  @IsEmail({}, { message: 'Email address must be valid' })
   email: string;
 
+  @IsNotEmpty({ message: 'Phone number is required' })
+  @Matches(/^\+?[0-9\s\-()]{7,20}$/, {
+    message: 'Phone number must be valid',
+  })
+  phone: string;
+
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'Message is required' })
   message: string;
+
+  @IsString()
+  @IsNotEmpty({ message: 'Please complete the captcha' })
+  captchaToken: string;
 }
