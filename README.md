@@ -1,4 +1,4 @@
-# Sleeky Programmers Ltd Website Email Messaging API
+# Sleeky Programmers Email Messaging API
 
 ## Get Started
 
