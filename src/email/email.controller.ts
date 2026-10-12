@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, Ip } from '@nestjs/common';
 import { EmailService } from './email.service';
 import { CreateContactDto } from './dto/create-contact.dto';
 
@@ -8,12 +8,18 @@ export class EmailController {
 
   @Post()
   @HttpCode(200)
-  async sendContactEmail(@Body() createContactDto: CreateContactDto) {
-    const { firstName, lastName, email, message } = createContactDto;
+  async sendContactEmail(
+    @Body() createContactDto: CreateContactDto,
+    @Ip() ip: string,
+  ) {
+    const { firstName, lastName, email, phone, message, captchaToken } =
+      createContactDto;
+    await this.emailService.verifyCaptcha(captchaToken, ip);
     await this.emailService.sendContactEmail(
       firstName,
       lastName,
       email,
+      phone,
       message,
     );
     return { message: 'Email sent successfully' };
