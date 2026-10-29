@@ -51,6 +51,10 @@ export class EmailService {
     }
   }
 
+  async send(mailOptions: nodemailer.SendMailOptions) {
+    return this.transporter.sendMail(mailOptions);
+  }
+
   async sendContactEmail(
     firstName: string,
     lastName: string,
