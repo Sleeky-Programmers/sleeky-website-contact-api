@@ -2,11 +2,13 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 
 @Injectable()
 export class EmailService {
+  private readonly logger = new Logger(EmailService.name);
   private transporter: any;
 
   constructor() {
@@ -21,7 +23,24 @@ export class EmailService {
     });
   }
 
+  /**
+   * RECAPTCHA_DISABLED=true skips verification for testing (local or Vercel
+   * preview). It is ignored on production deployments, so the live site is
+   * always protected.
+   */
+  get captchaDisabled() {
+    return (
+      process.env.RECAPTCHA_DISABLED === 'true' &&
+      process.env.VERCEL_ENV !== 'production'
+    );
+  }
+
   async verifyCaptcha(token: string, remoteIp?: string) {
+    if (this.captchaDisabled) {
+      this.logger.warn('reCAPTCHA verification skipped (RECAPTCHA_DISABLED)');
+      return;
+    }
+
     const params = new URLSearchParams({
       secret: `${process.env.RECAPTCHA_SECRET_KEY}`,
       response: token,
