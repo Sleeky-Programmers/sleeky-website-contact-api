@@ -7,7 +7,7 @@ import {
 import * as request from 'supertest';
 import { BriefModule } from './../src/brief/brief.module';
 import { EmailService } from './../src/email/email.service';
-import { HubspotService } from './../src/hubspot/hubspot.service';
+import { ZohoService } from './../src/zoho/zoho.service';
 
 describe('BriefController (e2e)', () => {
   let app: INestApplication;
@@ -15,9 +15,9 @@ describe('BriefController (e2e)', () => {
     verifyCaptcha: jest.fn(),
     send: jest.fn(),
   };
-  const hubspotService = {
+  const zohoService = {
     enabled: true,
-    syncBrief: jest.fn(),
+    createLead: jest.fn(),
   };
 
   const validBrief = () =>
@@ -34,16 +34,13 @@ describe('BriefController (e2e)', () => {
       .field('captchaToken', 'token');
 
   beforeAll(async () => {
-    process.env.EMAIL_ADDRESS = 'team@example.com';
-    process.env.EMAIL_USERNAME = 'website@example.com';
-
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [BriefModule],
     })
       .overrideProvider(EmailService)
       .useValue(emailService)
-      .overrideProvider(HubspotService)
-      .useValue(hubspotService)
+      .overrideProvider(ZohoService)
+      .useValue(zohoService)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -54,76 +51,15 @@ describe('BriefController (e2e)', () => {
   beforeEach(() => {
     emailService.verifyCaptcha.mockReset().mockResolvedValue(undefined);
     emailService.send.mockReset().mockResolvedValue({});
-    hubspotService.enabled = true;
-    hubspotService.syncBrief.mockReset().mockResolvedValue({
-      contactId: '1',
-      dealId: '2',
-      dealUrl: 'https://app-eu1.hubspot.com/contacts/123/record/0-3/2',
-    });
-  });
-
-  it('records the brief in HubSpot and links the deal in the team email', async () => {
-    await validBrief()
-      .field('hutk', 'abc123')
-      .field('pageUri', 'https://sleekyprogrammers.com/start-a-project')
-      .attach('file', Buffer.from('%PDF-1.4 test'), {
-        filename: 'brief.pdf',
-        contentType: 'application/pdf',
-      })
-      .expect(200);
-
-    expect(hubspotService.syncBrief).toHaveBeenCalledWith(
-      expect.objectContaining({
-        services: ['website', 'business-automation'],
-        name: 'Ada Okafor',
-        email: 'ada@company.com',
-        hutk: 'abc123',
-        pageUri: 'https://sleekyprogrammers.com/start-a-project',
-        file: expect.objectContaining({
-          name: 'brief.pdf',
-          mimetype: 'application/pdf',
-        }),
-      }),
-    );
-    const [teamEmail] = emailService.send.mock.calls[0];
-    expect(teamEmail.html).toContain(
-      'https://app-eu1.hubspot.com/contacts/123/record/0-3/2',
-    );
-  });
-
-  it('still emails the brief when HubSpot fails, and flags it', async () => {
-    hubspotService.syncBrief.mockRejectedValue(new Error('HubSpot down'));
-
-    await validBrief().expect(200);
-
-    const [teamEmail] = emailService.send.mock.calls[0];
-    expect(teamEmail.html).toContain('could not be added to HubSpot');
-    expect(emailService.send).toHaveBeenCalledTimes(2);
-  });
-
-  it('skips HubSpot when it is not configured', async () => {
-    hubspotService.enabled = false;
-
-    await validBrief().expect(200);
-
-    expect(hubspotService.syncBrief).not.toHaveBeenCalled();
-  });
-
-  it('does not touch HubSpot when the captcha fails', async () => {
-    emailService.verifyCaptcha.mockRejectedValue(
-      new BadRequestException([
-        'Captcha verification failed, please try again',
-      ]),
-    );
-
-    await validBrief().expect(400);
-    expect(hubspotService.syncBrief).not.toHaveBeenCalled();
+    zohoService.enabled = true;
+    zohoService.createLead.mockReset().mockResolvedValue('5725767000000123001');
   });
 
   afterAll(() => app.close());
 
-  it('sends the team email with the attachment and a confirmation', async () => {
+  it('records the brief as a Zoho CRM lead, with the attachment', async () => {
     await validBrief()
+      .field('pageUri', 'https://sleekyprogrammers.com/start-a-project')
       .attach('file', Buffer.from('%PDF-1.4 test'), {
         filename: 'brief.pdf',
         contentType: 'application/pdf',
@@ -134,19 +70,57 @@ describe('BriefController (e2e)', () => {
       'token',
       expect.any(String),
     );
-    expect(emailService.send).toHaveBeenCalledTimes(2);
-
-    const [teamEmail] = emailService.send.mock.calls[0];
-    expect(teamEmail.to).toBe('team@example.com');
-    expect(teamEmail.replyTo).toBe('ada@company.com');
-    expect(teamEmail.subject).toContain('Website, Business automation');
-    expect(teamEmail.attachments[0].filename).toBe('brief.pdf');
-
-    const [confirmation] = emailService.send.mock.calls[1];
-    expect(confirmation.to).toBe('ada@company.com');
+    expect(zohoService.createLead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        services: ['website', 'business-automation'],
+        name: 'Ada Okafor',
+        email: 'ada@company.com',
+        phone: '0801 234 5678',
+        channel: 'whatsapp',
+        pageUri: 'https://sleekyprogrammers.com/start-a-project',
+        file: expect.objectContaining({
+          name: 'brief.pdf',
+          mimetype: 'application/pdf',
+        }),
+      }),
+    );
   });
 
-  it('accepts a single service and no email, skipping the confirmation', async () => {
+  it('sends no email itself (Zoho workflows do that)', async () => {
+    await validBrief().expect(200);
+    expect(emailService.send).not.toHaveBeenCalled();
+  });
+
+  it('still accepts the old HubSpot field from earlier website builds', async () => {
+    await validBrief().field('hutk', 'abc123').expect(200);
+  });
+
+  it('asks the visitor to try again when Zoho fails, and logs the brief', async () => {
+    zohoService.createLead.mockRejectedValue(new Error('Zoho down'));
+
+    const res = await validBrief().expect(500);
+    expect(res.body.message).toEqual([
+      "We couldn't send your brief just now. Please try again in a moment, or message us on WhatsApp.",
+    ]);
+  });
+
+  it('refuses briefs when Zoho is not set up, rather than losing them', async () => {
+    zohoService.enabled = false;
+    await validBrief().expect(500);
+    expect(zohoService.createLead).not.toHaveBeenCalled();
+  });
+
+  it('does not touch Zoho when the captcha fails', async () => {
+    emailService.verifyCaptcha.mockRejectedValue(
+      new BadRequestException([
+        'Captcha verification failed, please try again',
+      ]),
+    );
+    await validBrief().expect(400);
+    expect(zohoService.createLead).not.toHaveBeenCalled();
+  });
+
+  it('accepts a single service and no email', async () => {
     await request(app.getHttpServer())
       .post('/brief')
       .field('services', 'branding')
@@ -158,24 +132,9 @@ describe('BriefController (e2e)', () => {
       .field('captchaToken', 'token')
       .expect(200);
 
-    expect(emailService.send).toHaveBeenCalledTimes(1);
-  });
-
-  it('escapes HTML in submitted fields', async () => {
-    await request(app.getHttpServer())
-      .post('/brief')
-      .field('services', 'website')
-      .field('goal', '<script>alert(1)</script>')
-      .field('timeline', 'asap')
-      .field('name', 'Ada')
-      .field('phone', '08012345678')
-      .field('channel', 'whatsapp')
-      .field('captchaToken', 'token')
-      .expect(200);
-
-    const [teamEmail] = emailService.send.mock.calls[0];
-    expect(teamEmail.html).not.toContain('<script>');
-    expect(teamEmail.html).toContain('&lt;script&gt;');
+    expect(zohoService.createLead).toHaveBeenCalledWith(
+      expect.objectContaining({ services: ['branding'], email: undefined }),
+    );
   });
 
   it('rejects a brief with no services', async () => {
@@ -190,7 +149,7 @@ describe('BriefController (e2e)', () => {
       .expect(400);
 
     expect(res.body.message).toContain('Pick at least one service');
-    expect(emailService.send).not.toHaveBeenCalled();
+    expect(zohoService.createLead).not.toHaveBeenCalled();
   });
 
   it('requires an email or phone number', async () => {
@@ -220,7 +179,7 @@ describe('BriefController (e2e)', () => {
     expect(res.body.message).toEqual([
       'Attach a PDF, Word document or image (PNG or JPG)',
     ]);
-    expect(emailService.send).not.toHaveBeenCalled();
+    expect(zohoService.createLead).not.toHaveBeenCalled();
   });
 
   it('rejects files over 4 MB', async () => {
@@ -231,25 +190,6 @@ describe('BriefController (e2e)', () => {
       })
       .expect(413);
 
-    expect(emailService.send).not.toHaveBeenCalled();
-  });
-
-  it('does not send anything when the captcha fails', async () => {
-    emailService.verifyCaptcha.mockRejectedValue(
-      new BadRequestException([
-        'Captcha verification failed, please try again',
-      ]),
-    );
-
-    await validBrief().expect(400);
-    expect(emailService.send).not.toHaveBeenCalled();
-  });
-
-  it('still succeeds if only the confirmation email fails', async () => {
-    emailService.send
-      .mockResolvedValueOnce({})
-      .mockRejectedValueOnce(new Error('SMTP down'));
-
-    await validBrief().expect(200);
+    expect(zohoService.createLead).not.toHaveBeenCalled();
   });
 });

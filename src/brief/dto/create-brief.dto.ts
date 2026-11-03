@@ -82,14 +82,7 @@ export class CreateBriefDto {
   @IsNotEmpty({ message: 'Please complete the captcha' })
   captchaToken: string;
 
-  // HubSpot tracking cookie (hubspotutk) and the page the brief was sent from,
-  // so the HubSpot contact is linked to the visitor's page views and source.
-  @Transform(emptyToUndefined)
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  hutk?: string;
-
+  // The page the brief was sent from (kept in the lead's note).
   @Transform(emptyToUndefined)
   @IsOptional()
   @IsString()
