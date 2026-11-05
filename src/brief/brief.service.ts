@@ -4,18 +4,30 @@ import {
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
+import {
+  BriefFilesService,
+  type StoredBriefFile,
+} from '../brief-files/brief-files.service';
 import { EmailService } from '../email/email.service';
+import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { ZohoService } from '../zoho/zoho.service';
 import { CreateBriefDto } from './dto/create-brief.dto';
-import { ALLOWED_FILE_TYPES } from './brief.options';
+import {
+  ALLOWED_FILE_TYPES,
+  CHANNEL_LABELS,
+  SERVICE_LABELS,
+  TIMELINE_LABELS,
+} from './brief.options';
 
 const SEND_FAILED =
   "We couldn't send your brief just now. Please try again in a moment, or message us on WhatsApp.";
 
 /**
- * Handles "Start a project" briefs: checks them, then records each one as a
- * Lead in Zoho CRM. Zoho's workflow rules send the team alert and the client's
- * confirmation email, so this service sends no email itself.
+ * Handles "Start a project" briefs: checks them, keeps any file in Cloudinary,
+ * records the brief as a Lead in Zoho CRM (whose workflow rules send the team
+ * email and the client's confirmation), then alerts the team on WhatsApp for
+ * email and phone-call briefs. WhatsApp briefs are finished by the client,
+ * who sends a pre-filled message from the website's thank-you page.
  */
 @Injectable()
 export class BriefService {
@@ -24,6 +36,8 @@ export class BriefService {
   constructor(
     private readonly emailService: EmailService,
     private readonly zohoService: ZohoService,
+    private readonly briefFiles: BriefFilesService,
+    private readonly whatsapp: WhatsAppService,
   ) {}
 
   async submit(
@@ -43,6 +57,30 @@ export class BriefService {
       throw new InternalServerErrorException([SEND_FAILED]);
     }
 
+    const attachment = file
+      ? {
+          name: file.originalname,
+          buffer: file.buffer,
+          mimetype: file.mimetype,
+        }
+      : undefined;
+
+    // 1. The file goes to Cloudinary (private) for an expiring link the client's
+    //    WhatsApp message and the team alert can carry. It's also attached to
+    //    the Zoho lead, so a Cloudinary problem never loses it.
+    let storedFile: StoredBriefFile | undefined;
+    if (attachment && this.briefFiles.enabled) {
+      try {
+        storedFile = await this.briefFiles.store(attachment);
+      } catch (error) {
+        this.logger.error(
+          'Uploading the brief attachment to Cloudinary failed',
+          error,
+        );
+      }
+    }
+
+    // 2. The lead is saved to Zoho CRM before anything else happens.
     try {
       const leadId = await this.zohoService.createLead({
         services: brief.services,
@@ -55,13 +93,8 @@ export class BriefService {
         phone: brief.phone,
         channel: brief.channel,
         pageUri: brief.pageUri,
-        file: file
-          ? {
-              name: file.originalname,
-              buffer: file.buffer,
-              mimetype: file.mimetype,
-            }
-          : undefined,
+        file: attachment,
+        fileLink: storedFile,
       });
       this.logger.log(`Brief recorded as Zoho CRM lead ${leadId}`);
     } catch (error) {
@@ -70,6 +103,37 @@ export class BriefService {
       this.logger.error('Saving the brief to Zoho CRM failed', error);
       this.logLostBrief(brief, file);
       throw new InternalServerErrorException([SEND_FAILED]);
+    }
+
+    // 3. Email and phone-call briefs: a WhatsApp alert to the team (phone-call
+    //    briefs also to the main business number). WhatsApp briefs reach the
+    //    team when the client sends their pre-filled message.
+    if (brief.channel !== 'whatsapp') await this.alertTeam(brief, storedFile);
+
+    return { fileUrl: storedFile?.url };
+  }
+
+  private async alertTeam(brief: CreateBriefDto, storedFile?: StoredBriefFile) {
+    if (!this.whatsapp.enabled) {
+      this.logger.warn('WhatsApp team alerts are not set up; skipping');
+      return;
+    }
+    try {
+      const sent = await this.whatsapp.alertTeam(
+        {
+          name: brief.company ? `${brief.name} (${brief.company})` : brief.name,
+          channel: CHANNEL_LABELS[brief.channel],
+          contact: [brief.phone, brief.email].filter(Boolean).join(' / '),
+          services: brief.services.map((id) => SERVICE_LABELS[id]).join(', '),
+          timeline: TIMELINE_LABELS[brief.timeline],
+          fileUrl: storedFile?.url,
+        },
+        { includeBusinessNumber: brief.channel === 'phone' },
+      );
+      this.logger.log(`WhatsApp alert sent to ${sent} number(s)`);
+    } catch (error) {
+      // The lead is already in Zoho and its email workflow runs; the alert is extra.
+      this.logger.error('WhatsApp team alert failed', error);
     }
   }
 

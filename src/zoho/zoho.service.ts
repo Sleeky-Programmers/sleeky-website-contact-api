@@ -52,6 +52,8 @@ export type BriefForZoho = {
   channel: string;
   pageUri?: string;
   file?: { name: string; buffer: Buffer; mimetype: string };
+  /** Private Cloudinary download link for the file, noted on the lead. */
+  fileLink?: { url: string; expiresAt: Date };
 };
 
 type ZohoField = {
@@ -343,6 +345,11 @@ export class ZohoService {
       `Existing site or app: ${brief.existing ? EXISTING_LABELS[brief.existing] : 'Not answered'}`,
       `Preferred channel: ${CHANNEL_LABELS[brief.channel]}`,
       `Attachment: ${brief.file ? brief.file.name : 'None'}`,
+      ...(brief.fileLink
+        ? [
+            `File link (works until ${brief.fileLink.expiresAt.toISOString().slice(0, 10)}): ${brief.fileLink.url}`,
+          ]
+        : []),
       ...(brief.pageUri ? [`Sent from: ${brief.pageUri}`] : []),
       '',
       'What they want to achieve:',

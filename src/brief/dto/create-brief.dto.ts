@@ -16,6 +16,7 @@ import {
   SERVICE_LABELS,
   TIMELINE_LABELS,
 } from '../brief.options';
+import { INVALID_PHONE_MESSAGE, normalisePhone } from '../phone';
 
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
@@ -68,11 +69,16 @@ export class CreateBriefDto {
   @IsEmail({}, { message: 'Email address must be valid' })
   email?: string;
 
-  @Transform(emptyToUndefined)
-  @IsOptional()
-  @Matches(/^\+?[0-9\s\-()]{7,20}$/, {
-    message: 'WhatsApp number must be valid',
+  // Normalised to international format (+2348031234567) when it's a real number;
+  // anything else is left as typed and rejected below.
+  @Transform(({ value }) => {
+    const trimmed = emptyToUndefined({ value });
+    return typeof trimmed === 'string'
+      ? (normalisePhone(trimmed) ?? trimmed)
+      : trimmed;
   })
+  @IsOptional()
+  @Matches(/^\+[1-9]\d{6,14}$/, { message: INVALID_PHONE_MESSAGE })
   phone?: string;
 
   @IsIn(Object.keys(CHANNEL_LABELS))
