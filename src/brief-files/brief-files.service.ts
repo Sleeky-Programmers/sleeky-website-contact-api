@@ -45,8 +45,9 @@ export class BriefFilesService {
         {
           ...this.credentials,
           type: 'private',
-          // Images and PDFs as "image", Word documents as "raw".
-          resource_type: 'auto',
+          // PNG/JPG as images; PDFs and Word documents as plain files, which
+          // Cloudinary stores as they are (it rejects PDFs it can't render).
+          resource_type: file.mimetype.startsWith('image/') ? 'image' : 'raw',
           folder: FOLDER,
           use_filename: true,
           unique_filename: true,

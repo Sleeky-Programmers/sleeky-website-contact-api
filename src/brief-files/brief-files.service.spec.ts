@@ -31,31 +31,32 @@ describe('BriefFilesService', () => {
 
   it('uploads the file as private and returns a signed, expiring download link', async () => {
     const options = fakeUpload({
-      public_id: 'sleeky-website/briefs/brief_ab12',
-      format: 'pdf',
+      public_id: 'sleeky-website/briefs/mockup_ab12',
+      format: 'png',
       resource_type: 'image',
     });
     const before = Date.now();
 
     const stored = await new BriefFilesService().store({
-      name: 'brief.pdf',
-      buffer: Buffer.from('%PDF'),
-      mimetype: 'application/pdf',
+      name: 'mockup.png',
+      buffer: Buffer.from('PNG'),
+      mimetype: 'image/png',
     });
 
     expect(options[0]).toMatchObject({
       type: 'private',
-      resource_type: 'auto',
+      resource_type: 'image',
       folder: 'sleeky-website/briefs',
-      filename_override: 'brief.pdf',
+      filename_override: 'mockup.png',
     });
     const url = new URL(stored.url);
     expect(url.origin + url.pathname).toBe(
       'https://api.cloudinary.com/v1_1/demo/image/download',
     );
     expect(url.searchParams.get('public_id')).toBe(
-      'sleeky-website/briefs/brief_ab12',
+      'sleeky-website/briefs/mockup_ab12',
     );
+    expect(url.searchParams.get('format')).toBe('png');
     expect(url.searchParams.get('type')).toBe('private');
     expect(url.searchParams.get('signature')).toBeTruthy();
     // Valid for 30 days by default.
@@ -65,21 +66,31 @@ describe('BriefFilesService', () => {
     expect(stored.expiresAt.getTime()).toBe(expiresAt);
   });
 
-  it('links Word documents as raw files, keeping their extension', async () => {
-    fakeUpload({
-      public_id: 'sleeky-website/briefs/brief_cd34.docx',
-      resource_type: 'raw',
-    });
-    const stored = await new BriefFilesService().store({
-      name: 'brief.docx',
-      buffer: Buffer.from('PK'),
-      mimetype:
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    });
-    const url = new URL(stored.url);
-    expect(url.pathname).toBe('/v1_1/demo/raw/download');
-    expect(url.searchParams.get('public_id')).toBe(
-      'sleeky-website/briefs/brief_cd34.docx',
-    );
-  });
+  it.each([
+    ['brief.pdf', 'application/pdf'],
+    [
+      'brief.docx',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ],
+  ])(
+    'stores %s as a plain file (not inspected) and links it with its extension',
+    async (name, mimetype) => {
+      const extension = name.split('.').pop();
+      const options = fakeUpload({
+        public_id: `sleeky-website/briefs/brief_cd34.${extension}`,
+        resource_type: 'raw',
+      });
+      const stored = await new BriefFilesService().store({
+        name,
+        buffer: Buffer.from('file'),
+        mimetype,
+      });
+      expect(options[0]).toMatchObject({ resource_type: 'raw' });
+      const url = new URL(stored.url);
+      expect(url.pathname).toBe('/v1_1/demo/raw/download');
+      expect(url.searchParams.get('public_id')).toBe(
+        `sleeky-website/briefs/brief_cd34.${extension}`,
+      );
+    },
+  );
 });
