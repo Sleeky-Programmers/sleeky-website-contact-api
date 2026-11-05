@@ -16,7 +16,7 @@ describe('BriefController (e2e)', () => {
   const emailService = { verifyCaptcha: jest.fn(), send: jest.fn() };
   const zohoService = { enabled: true, createLead: jest.fn() };
   const briefFiles = { enabled: true, store: jest.fn() };
-  const whatsapp = { enabled: true, alertTeam: jest.fn() };
+  const whatsapp = { enabled: true, alert: jest.fn() };
   const FILE_URL =
     'https://api.cloudinary.com/v1_1/demo/image/download?signature=abc';
 
@@ -66,7 +66,7 @@ describe('BriefController (e2e)', () => {
       expiresAt: new Date('2026-12-05T00:00:00Z'),
     });
     whatsapp.enabled = true;
-    whatsapp.alertTeam.mockReset().mockResolvedValue(2);
+    whatsapp.alert.mockReset().mockResolvedValue(undefined);
   });
 
   afterAll(() => app.close());
@@ -94,7 +94,7 @@ describe('BriefController (e2e)', () => {
         }),
       );
       // The client sends the WhatsApp message themselves; no API alert.
-      expect(whatsapp.alertTeam).not.toHaveBeenCalled();
+      expect(whatsapp.alert).not.toHaveBeenCalled();
     });
 
     it('still saves the lead (with the file attached in Zoho) if Cloudinary fails', async () => {
@@ -120,50 +120,47 @@ describe('BriefController (e2e)', () => {
     });
   });
 
-  describe('team WhatsApp alerts', () => {
-    it('alerts the team numbers for email briefs, after saving the lead', async () => {
+  describe("WhatsApp alerts to Sleeky's number", () => {
+    it('alerts our WhatsApp number for email briefs, after saving the lead', async () => {
       await brief('email')
         .attach('file', Buffer.from('%PDF-1.4 test'), pdf)
         .expect(200);
 
-      expect(whatsapp.alertTeam).toHaveBeenCalledWith(
-        {
-          name: 'Ada Okafor (Acme)',
-          channel: 'Email',
-          contact: '+2348031234567 / ada@company.com',
-          services: 'Website, Business automation',
-          timeline: 'ASAP',
-          fileUrl: FILE_URL,
-        },
-        { includeBusinessNumber: false },
-      );
+      expect(whatsapp.alert).toHaveBeenCalledWith({
+        name: 'Ada Okafor (Acme)',
+        channel: 'Email',
+        contact: '+2348031234567 / ada@company.com',
+        services: 'Website, Business automation',
+        timeline: 'ASAP',
+        goal: 'We want customers to book online.',
+        fileUrl: FILE_URL,
+      });
       expect(zohoService.createLead.mock.invocationCallOrder[0]).toBeLessThan(
-        whatsapp.alertTeam.mock.invocationCallOrder[0],
+        whatsapp.alert.mock.invocationCallOrder[0],
       );
     });
 
-    it('also alerts the main business number for phone-call briefs', async () => {
+    it('alerts it for phone-call briefs too', async () => {
       await brief('phone').expect(200);
-      expect(whatsapp.alertTeam).toHaveBeenCalledWith(
+      expect(whatsapp.alert).toHaveBeenCalledWith(
         expect.objectContaining({ channel: 'Phone call' }),
-        { includeBusinessNumber: true },
       );
     });
 
     it("doesn't fail the brief when the alert fails or isn't set up", async () => {
-      whatsapp.alertTeam.mockRejectedValue(new Error('WhatsApp API 401'));
+      whatsapp.alert.mockRejectedValue(new Error('WhatsApp API 401'));
       await brief('email').expect(200);
 
       whatsapp.enabled = false;
-      whatsapp.alertTeam.mockClear();
+      whatsapp.alert.mockClear();
       await brief('email').expect(200);
-      expect(whatsapp.alertTeam).not.toHaveBeenCalled();
+      expect(whatsapp.alert).not.toHaveBeenCalled();
     });
 
     it('sends no alert when the lead could not be saved', async () => {
       zohoService.createLead.mockRejectedValue(new Error('Zoho down'));
       await brief('email').expect(500);
-      expect(whatsapp.alertTeam).not.toHaveBeenCalled();
+      expect(whatsapp.alert).not.toHaveBeenCalled();
     });
   });
 
@@ -244,7 +241,7 @@ describe('BriefController (e2e)', () => {
       .expect(400);
     expect(briefFiles.store).not.toHaveBeenCalled();
     expect(zohoService.createLead).not.toHaveBeenCalled();
-    expect(whatsapp.alertTeam).not.toHaveBeenCalled();
+    expect(whatsapp.alert).not.toHaveBeenCalled();
   });
 
   it('rejects a brief with no services', async () => {

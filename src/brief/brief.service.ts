@@ -25,8 +25,8 @@ const SEND_FAILED =
 /**
  * Handles "Start a project" briefs: checks them, keeps any file in Cloudinary,
  * records the brief as a Lead in Zoho CRM (whose workflow rules send the team
- * email and the client's confirmation), then alerts the team on WhatsApp for
- * email and phone-call briefs. WhatsApp briefs are finished by the client,
+ * email and the client's confirmation), then sends a WhatsApp alert to Sleeky's
+ * WhatsApp number for email and phone-call briefs. WhatsApp briefs are finished by the client,
  * who sends a pre-filled message from the website's thank-you page.
  */
 @Injectable()
@@ -105,35 +105,39 @@ export class BriefService {
       throw new InternalServerErrorException([SEND_FAILED]);
     }
 
-    // 3. Email and phone-call briefs: a WhatsApp alert to the team (phone-call
-    //    briefs also to the main business number). WhatsApp briefs reach the
-    //    team when the client sends their pre-filled message.
-    if (brief.channel !== 'whatsapp') await this.alertTeam(brief, storedFile);
+    // 3. Email and phone-call briefs: a WhatsApp alert to Sleeky's WhatsApp
+    //    number. WhatsApp briefs arrive there when the client sends their
+    //    pre-filled message.
+    if (brief.channel !== 'whatsapp')
+      await this.sendWhatsAppAlert(brief, storedFile);
 
     return { fileUrl: storedFile?.url };
   }
 
-  private async alertTeam(brief: CreateBriefDto, storedFile?: StoredBriefFile) {
+  private async sendWhatsAppAlert(
+    brief: CreateBriefDto,
+    storedFile?: StoredBriefFile,
+  ) {
     if (!this.whatsapp.enabled) {
-      this.logger.warn('WhatsApp team alerts are not set up; skipping');
+      this.logger.warn(
+        'WhatsApp alerts are not set up (CALLMEBOT_API_KEY); skipping',
+      );
       return;
     }
     try {
-      const sent = await this.whatsapp.alertTeam(
-        {
-          name: brief.company ? `${brief.name} (${brief.company})` : brief.name,
-          channel: CHANNEL_LABELS[brief.channel],
-          contact: [brief.phone, brief.email].filter(Boolean).join(' / '),
-          services: brief.services.map((id) => SERVICE_LABELS[id]).join(', '),
-          timeline: TIMELINE_LABELS[brief.timeline],
-          fileUrl: storedFile?.url,
-        },
-        { includeBusinessNumber: brief.channel === 'phone' },
-      );
-      this.logger.log(`WhatsApp alert sent to ${sent} number(s)`);
+      await this.whatsapp.alert({
+        name: brief.company ? `${brief.name} (${brief.company})` : brief.name,
+        channel: CHANNEL_LABELS[brief.channel],
+        contact: [brief.phone, brief.email].filter(Boolean).join(' / '),
+        services: brief.services.map((id) => SERVICE_LABELS[id]).join(', '),
+        timeline: TIMELINE_LABELS[brief.timeline],
+        goal: brief.goal,
+        fileUrl: storedFile?.url,
+      });
+      this.logger.log('WhatsApp alert sent');
     } catch (error) {
       // The lead is already in Zoho and its email workflow runs; the alert is extra.
-      this.logger.error('WhatsApp team alert failed', error);
+      this.logger.error('WhatsApp alert failed', error);
     }
   }
 

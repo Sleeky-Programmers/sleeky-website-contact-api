@@ -1,37 +1,4 @@
-import {
-  parseNumbers,
-  templateText,
-  WhatsAppService,
-} from './whatsapp.service';
-
-type Call = { url: string; method: string; body?: any; auth?: string };
-
-const json = (data: unknown, status = 200) =>
-  new Response(JSON.stringify(data), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
-
-function fakeMeta(senderNumber = '+234 815 000 1111') {
-  const calls: Call[] = [];
-  const fetchMock = jest.fn(
-    async (input: string | URL, init: RequestInit = {}) => {
-      const url = String(input);
-      calls.push({
-        url,
-        method: init.method ?? 'GET',
-        body: init.body ? JSON.parse(String(init.body)) : undefined,
-        auth: (init.headers as Record<string, string>)?.Authorization,
-      });
-      if (url.includes('fields=display_phone_number'))
-        return json({ display_phone_number: senderNumber });
-      if (url.endsWith('/messages'))
-        return json({ messages: [{ id: 'wamid.1' }] });
-      return json({ error: { message: 'unexpected' } }, 404);
-    },
-  );
-  return { calls, fetchMock };
-}
+import { alertMessage, WhatsAppService } from './whatsapp.service';
 
 const alert = {
   name: 'Ada Okafor (Acme)',
@@ -39,131 +6,96 @@ const alert = {
   contact: '+2348031234567 / ada@company.com',
   services: 'Website, Business automation',
   timeline: 'ASAP',
-  fileUrl: 'https://api.cloudinary.com/v1_1/demo/image/download?signature=x',
+  goal: 'We want customers to book and pay online.',
+  fileUrl: 'https://api.cloudinary.com/v1_1/demo/raw/download?signature=x',
 };
 
-describe('WhatsAppService', () => {
+const respond = (body: string, status = 200) =>
+  jest.fn(async () => new Response(body, { status })) as jest.Mock;
+
+describe('WhatsAppService (CallMeBot)', () => {
   const realFetch = global.fetch;
 
   beforeEach(() => {
-    process.env.WHATSAPP_PHONE_NUMBER_ID = '1098765';
-    process.env.WHATSAPP_ACCESS_TOKEN = 'token';
-    process.env.WHATSAPP_TEAM_NUMBERS = '+234 803 123 4567, 08051234567';
-    delete process.env.WHATSAPP_BUSINESS_NUMBER;
-    delete process.env.WHATSAPP_TEMPLATE_NAME;
-    delete process.env.WHATSAPP_TEMPLATE_LANGUAGE;
+    process.env.CALLMEBOT_API_KEY = '123456';
+    delete process.env.WHATSAPP_ALERT_NUMBER;
   });
   afterEach(() => {
     global.fetch = realFetch;
   });
 
-  it('is only enabled with a sender, a token and at least one team number', () => {
+  it('is only enabled with a CallMeBot API key', () => {
     expect(new WhatsAppService().enabled).toBe(true);
-    process.env.WHATSAPP_TEAM_NUMBERS = 'not a number';
+    delete process.env.CALLMEBOT_API_KEY;
     expect(new WhatsAppService().enabled).toBe(false);
   });
 
-  it('sends the template to each team number, from the separate sender', async () => {
-    const meta = fakeMeta();
-    global.fetch = meta.fetchMock as unknown as typeof fetch;
-
-    expect(await new WhatsAppService().alertTeam(alert)).toBe(2);
-
-    const messages = meta.calls.filter((call) =>
-      call.url.endsWith('/messages'),
+  it("sends the alert to Sleeky's WhatsApp number by default", async () => {
+    const fetchMock = respond(
+      '<p>Message queued. You will receive it in a few seconds.</p>',
     );
-    expect(messages.map((call) => call.body.to)).toEqual([
-      '2348031234567',
-      '2348051234567',
-    ]);
-    expect(messages[0].url).toBe(
-      'https://graph.facebook.com/v21.0/1098765/messages',
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await new WhatsAppService().alert(alert);
+
+    const url = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(url.origin + url.pathname).toBe(
+      'https://api.callmebot.com/whatsapp.php',
     );
-    expect(messages[0].auth).toBe('Bearer token');
-    expect(messages[0].body).toEqual({
-      messaging_product: 'whatsapp',
-      to: '2348031234567',
-      type: 'template',
-      template: {
-        name: 'new_website_brief',
-        language: { code: 'en' },
-        components: [
-          {
-            type: 'body',
-            parameters: [
-              alert.name,
-              alert.channel,
-              alert.contact,
-              alert.services,
-              alert.timeline,
-              alert.fileUrl,
-            ].map((text) => ({ type: 'text', text })),
-          },
-        ],
-      },
-    });
+    expect(url.searchParams.get('phone')).toBe('+2349160952000');
+    expect(url.searchParams.get('apikey')).toBe('123456');
+    expect(url.searchParams.get('text')).toBe(alertMessage(alert));
   });
 
-  it('adds the main business number only when asked (phone-call briefs)', async () => {
-    const meta = fakeMeta();
-    global.fetch = meta.fetchMock as unknown as typeof fetch;
+  it('uses WHATSAPP_ALERT_NUMBER when set, in any common format', async () => {
+    process.env.WHATSAPP_ALERT_NUMBER = '0803 123 4567';
+    const fetchMock = respond('Message queued');
+    global.fetch = fetchMock as unknown as typeof fetch;
 
-    await new WhatsAppService().alertTeam(alert, {
-      includeBusinessNumber: true,
-    });
-    const recipients = meta.calls
-      .filter((call) => call.url.endsWith('/messages'))
-      .map((call) => call.body.to);
-    expect(recipients).toEqual([
-      '2348031234567',
-      '2348051234567',
-      '2349160952000',
-    ]);
+    await new WhatsAppService().alert(alert);
+    expect(
+      new URL(String(fetchMock.mock.calls[0][0])).searchParams.get('phone'),
+    ).toBe('+2348031234567');
   });
 
-  it('refuses to send from the main business number', async () => {
-    const meta = fakeMeta('+234 916 095 2000');
-    global.fetch = meta.fetchMock as unknown as typeof fetch;
-
-    await expect(new WhatsAppService().alertTeam(alert)).rejects.toThrow(
-      /main WhatsApp Business number/,
+  it("reports CallMeBot's reason when it refuses", async () => {
+    global.fetch = respond(
+      '<p>APIKey is invalid. Activate the API again.</p>',
+      203,
+    ) as unknown as typeof fetch;
+    await expect(new WhatsAppService().alert(alert)).rejects.toThrow(
+      /APIKey is invalid/,
     );
-    expect(meta.calls.some((call) => call.url.endsWith('/messages'))).toBe(
-      false,
-    );
-  });
-
-  it('counts only the messages that went through', async () => {
-    const meta = fakeMeta();
-    const base = meta.fetchMock.getMockImplementation()!;
-    meta.fetchMock.mockImplementation(async (input, init) => {
-      if (
-        String(input).endsWith('/messages') &&
-        String(init?.body).includes('2348051234567')
-      ) {
-        return json({ error: { message: 'Recipient not on WhatsApp' } }, 400);
-      }
-      return base(input, init);
-    });
-    global.fetch = meta.fetchMock as unknown as typeof fetch;
-
-    expect(await new WhatsAppService().alertTeam(alert)).toBe(1);
   });
 });
 
-describe('template helpers', () => {
-  it('keeps template text on one line, as WhatsApp requires', () => {
-    expect(templateText('Line one\nLine\ttwo     spaced')).toBe(
-      'Line one Line two spaced',
+describe('alertMessage', () => {
+  it('lists the brief details, the file link and where the full brief is', () => {
+    expect(alertMessage(alert)).toBe(
+      [
+        '*New project brief from the website*',
+        '',
+        'Name: Ada Okafor (Acme)',
+        'Reply by: Email',
+        'Contact: +2348031234567 / ada@company.com',
+        'Services: Website, Business automation',
+        'Timeline: ASAP',
+        `File: ${alert.fileUrl}`,
+        '',
+        'Goal: We want customers to book and pay online.',
+        '',
+        'The full brief is in Zoho CRM.',
+      ].join('\n'),
     );
-    expect(templateText('   ')).toBe('-');
-    expect(templateText('x'.repeat(300), 200)).toHaveLength(200);
   });
 
-  it('reads team numbers in any common format and drops invalid ones', () => {
-    expect(
-      parseNumbers('+234 803 123 4567, 2348051234567, 0803 123 4567, nope'),
-    ).toEqual(['2348031234567', '2348051234567']);
-    expect(parseNumbers(undefined)).toEqual([]);
+  it('leaves out the file line without a file, and trims long goals', () => {
+    const message = alertMessage({
+      ...alert,
+      fileUrl: undefined,
+      goal: 'x'.repeat(1000),
+    });
+    expect(message).not.toContain('File:');
+    expect(message).toContain(`Goal: ${'x'.repeat(400)}…`);
   });
 });
