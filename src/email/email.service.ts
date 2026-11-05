@@ -1,8 +1,14 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 
 @Injectable()
 export class EmailService {
+  private readonly logger = new Logger(EmailService.name);
   private transporter: any;
 
   constructor() {
@@ -17,15 +23,74 @@ export class EmailService {
     });
   }
 
+  /**
+   * RECAPTCHA_DISABLED=true skips verification for testing (local or Vercel
+   * preview). It is ignored on production deployments, so the live site is
+   * always protected.
+   */
+  get captchaDisabled() {
+    return (
+      process.env.RECAPTCHA_DISABLED === 'true' &&
+      process.env.VERCEL_ENV !== 'production'
+    );
+  }
+
+  async verifyCaptcha(token: string, remoteIp?: string) {
+    if (this.captchaDisabled) {
+      this.logger.warn('reCAPTCHA verification skipped (RECAPTCHA_DISABLED)');
+      return;
+    }
+
+    const params = new URLSearchParams({
+      secret: `${process.env.RECAPTCHA_SECRET_KEY}`,
+      response: token,
+    });
+
+    if (remoteIp) {
+      params.append('remoteip', remoteIp);
+    }
+
+    let success = false;
+
+    try {
+      const response = await fetch(
+        'https://www.google.com/recaptcha/api/siteverify',
+        { method: 'POST', body: params },
+      );
+      const data = await response.json();
+      success = data.success === true;
+    } catch {
+      success = false;
+    }
+
+    if (!success) {
+      throw new BadRequestException([
+        'Captcha verification failed, please try again',
+      ]);
+    }
+  }
+
+  async send(mailOptions: nodemailer.SendMailOptions) {
+    return this.transporter.sendMail(mailOptions);
+  }
+
   async sendContactEmail(
     firstName: string,
     lastName: string,
     email: string,
+    phone: string,
     message: string,
   ) {
+    if (!process.env.EMAIL_ADDRESS) {
+      console.error('EMAIL_ADDRESS environment variable is not set');
+      throw new InternalServerErrorException([
+        'Unable to send message right now, please try again later',
+      ]);
+    }
+
     const mailOptions = {
       from: `"${lastName} ${firstName}" <${email}>`,
-      to: 'support@sleekyprogrammers.com',
+      to: `${process.env.EMAIL_ADDRESS}`,
       subject: 'New Contact Form Submission',
       html: `
         <!DOCTYPE html>
@@ -89,6 +154,7 @@ export class EmailService {
                     <p><strong>First Name:</strong> ${firstName}</p>
                     <p><strong>Last Name:</strong> ${lastName}</p>
                     <p><strong>Email:</strong> ${email}</p>
+                    <p><strong>Phone Number:</strong> ${phone}</p>
                     <p><strong>Message:</strong></p>
                     <p>${message}</p>
                 </div>
