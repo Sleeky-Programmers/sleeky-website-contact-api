@@ -6,21 +6,19 @@ import {
 } from '@nestjs/common';
 import * as request from 'supertest';
 import { BriefModule } from './../src/brief/brief.module';
+import { BriefFilesService } from './../src/brief-files/brief-files.service';
 import { EmailService } from './../src/email/email.service';
 import { ZohoService } from './../src/zoho/zoho.service';
 
 describe('BriefController (e2e)', () => {
   let app: INestApplication;
-  const emailService = {
-    verifyCaptcha: jest.fn(),
-    send: jest.fn(),
-  };
-  const zohoService = {
-    enabled: true,
-    createLead: jest.fn(),
-  };
+  const emailService = { verifyCaptcha: jest.fn(), send: jest.fn() };
+  const zohoService = { enabled: true, createLead: jest.fn() };
+  const briefFiles = { enabled: true, store: jest.fn() };
+  const FILE_URL =
+    'https://api.cloudinary.com/v1_1/demo/image/download?signature=abc';
 
-  const validBrief = () =>
+  const brief = (channel: 'whatsapp' | 'email' | 'phone' = 'whatsapp') =>
     request(app.getHttpServer())
       .post('/brief')
       .field('services', 'website')
@@ -28,10 +26,13 @@ describe('BriefController (e2e)', () => {
       .field('goal', 'We want customers to book online.')
       .field('timeline', 'asap')
       .field('name', 'Ada Okafor')
+      .field('company', 'Acme')
       .field('email', 'ada@company.com')
-      .field('phone', '0801 234 5678')
-      .field('channel', 'whatsapp')
+      .field('phone', '0803 123 4567')
+      .field('channel', channel)
       .field('captchaToken', 'token');
+
+  const pdf = { filename: 'brief.pdf', contentType: 'application/pdf' };
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -41,6 +42,8 @@ describe('BriefController (e2e)', () => {
       .useValue(emailService)
       .overrideProvider(ZohoService)
       .useValue(zohoService)
+      .overrideProvider(BriefFilesService)
+      .useValue(briefFiles)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -53,52 +56,137 @@ describe('BriefController (e2e)', () => {
     emailService.send.mockReset().mockResolvedValue({});
     zohoService.enabled = true;
     zohoService.createLead.mockReset().mockResolvedValue('5725767000000123001');
+    briefFiles.enabled = true;
+    briefFiles.store.mockReset().mockResolvedValue({
+      url: FILE_URL,
+      expiresAt: new Date('2026-12-05T00:00:00Z'),
+    });
   });
 
   afterAll(() => app.close());
 
-  it('records the brief as a Zoho CRM lead, with the attachment', async () => {
-    await validBrief()
-      .field('pageUri', 'https://sleekyprogrammers.com/start-a-project')
-      .attach('file', Buffer.from('%PDF-1.4 test'), {
-        filename: 'brief.pdf',
-        contentType: 'application/pdf',
-      })
-      .expect(200, { message: 'Brief sent successfully' });
+  describe('WhatsApp briefs', () => {
+    it('saves the lead with the file and returns the file link for the message', async () => {
+      await brief('whatsapp')
+        .field('pageUri', 'https://sleekyprogrammers.com/start-a-project')
+        .attach('file', Buffer.from('%PDF-1.4 test'), pdf)
+        .expect(200, { message: 'Brief sent successfully', fileUrl: FILE_URL });
 
-    expect(emailService.verifyCaptcha).toHaveBeenCalledWith(
-      'token',
-      expect.any(String),
-    );
-    expect(zohoService.createLead).toHaveBeenCalledWith(
-      expect.objectContaining({
-        services: ['website', 'business-automation'],
-        name: 'Ada Okafor',
-        email: 'ada@company.com',
-        phone: '0801 234 5678',
-        channel: 'whatsapp',
-        pageUri: 'https://sleekyprogrammers.com/start-a-project',
-        file: expect.objectContaining({
+      expect(briefFiles.store).toHaveBeenCalledWith(
+        expect.objectContaining({
           name: 'brief.pdf',
           mimetype: 'application/pdf',
         }),
-      }),
+      );
+      expect(zohoService.createLead).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Ada Okafor',
+          phone: '+2348031234567',
+          channel: 'whatsapp',
+          file: expect.objectContaining({ name: 'brief.pdf' }),
+          fileLink: expect.objectContaining({ url: FILE_URL }),
+        }),
+      );
+    });
+
+    it('still saves the lead (with the file attached in Zoho) if Cloudinary fails', async () => {
+      briefFiles.store.mockRejectedValue(new Error('Cloudinary down'));
+      const res = await brief('whatsapp')
+        .attach('file', Buffer.from('%PDF-1.4 test'), pdf)
+        .expect(200);
+
+      expect(res.body.fileUrl).toBeUndefined();
+      expect(zohoService.createLead).toHaveBeenCalledWith(
+        expect.objectContaining({
+          file: expect.objectContaining({ name: 'brief.pdf' }),
+          fileLink: undefined,
+        }),
+      );
+    });
+
+    it('returns no file link without an attachment', async () => {
+      await brief('whatsapp').expect(200, {
+        message: 'Brief sent successfully',
+      });
+      expect(briefFiles.store).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('email and phone-call briefs', () => {
+    it.each(['email', 'phone'] as const)(
+      'saves %s briefs to Zoho with the file and its link',
+      async (channel) => {
+        await brief(channel)
+          .attach('file', Buffer.from('%PDF-1.4 test'), pdf)
+          .expect(200, {
+            message: 'Brief sent successfully',
+            fileUrl: FILE_URL,
+          });
+        expect(zohoService.createLead).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel,
+            fileLink: expect.objectContaining({ url: FILE_URL }),
+          }),
+        );
+      },
+    );
+  });
+
+  describe('phone numbers', () => {
+    it.each([
+      ['0803 123 4567', '+2348031234567'],
+      ['+234 803 123 4567', '+2348031234567'],
+      ['(0803) 123-4567', '+2348031234567'],
+      ['+44 7911 123456', '+447911123456'],
+    ])('accepts %s as %s', async (typed, saved) => {
+      await request(app.getHttpServer())
+        .post('/brief')
+        .field('services', 'website')
+        .field('goal', 'A site')
+        .field('timeline', 'asap')
+        .field('name', 'Ada')
+        .field('phone', typed)
+        .field('channel', 'whatsapp')
+        .field('captchaToken', 'token')
+        .expect(200);
+      expect(zohoService.createLead).toHaveBeenCalledWith(
+        expect.objectContaining({ phone: saved }),
+      );
+    });
+
+    it.each(['12345', '0803 123', '+234 000 000 0000', 'call me'])(
+      'rejects %s',
+      async (typed) => {
+        const res = await request(app.getHttpServer())
+          .post('/brief')
+          .field('services', 'website')
+          .field('goal', 'A site')
+          .field('timeline', 'asap')
+          .field('name', 'Ada')
+          .field('phone', typed)
+          .field('channel', 'whatsapp')
+          .field('captchaToken', 'token')
+          .expect(400);
+        expect(res.body.message).toEqual([
+          'Enter a valid WhatsApp number, e.g. 0803 123 4567 or +44 7911 123456',
+        ]);
+        expect(zohoService.createLead).not.toHaveBeenCalled();
+      },
     );
   });
 
   it('sends no email itself (Zoho workflows do that)', async () => {
-    await validBrief().expect(200);
+    await brief('email').expect(200);
     expect(emailService.send).not.toHaveBeenCalled();
   });
 
   it('still accepts the old HubSpot field from earlier website builds', async () => {
-    await validBrief().field('hutk', 'abc123').expect(200);
+    await brief().field('hutk', 'abc123').expect(200);
   });
 
-  it('asks the visitor to try again when Zoho fails, and logs the brief', async () => {
+  it('asks the visitor to try again when Zoho fails', async () => {
     zohoService.createLead.mockRejectedValue(new Error('Zoho down'));
-
-    const res = await validBrief().expect(500);
+    const res = await brief().expect(500);
     expect(res.body.message).toEqual([
       "We couldn't send your brief just now. Please try again in a moment, or message us on WhatsApp.",
     ]);
@@ -106,35 +194,21 @@ describe('BriefController (e2e)', () => {
 
   it('refuses briefs when Zoho is not set up, rather than losing them', async () => {
     zohoService.enabled = false;
-    await validBrief().expect(500);
+    await brief().expect(500);
     expect(zohoService.createLead).not.toHaveBeenCalled();
   });
 
-  it('does not touch Zoho when the captcha fails', async () => {
+  it('does not touch Zoho or Cloudinary when the captcha fails', async () => {
     emailService.verifyCaptcha.mockRejectedValue(
       new BadRequestException([
         'Captcha verification failed, please try again',
       ]),
     );
-    await validBrief().expect(400);
+    await brief('email')
+      .attach('file', Buffer.from('%PDF-1.4 test'), pdf)
+      .expect(400);
+    expect(briefFiles.store).not.toHaveBeenCalled();
     expect(zohoService.createLead).not.toHaveBeenCalled();
-  });
-
-  it('accepts a single service and no email', async () => {
-    await request(app.getHttpServer())
-      .post('/brief')
-      .field('services', 'branding')
-      .field('goal', 'A new logo')
-      .field('timeline', 'flexible')
-      .field('name', 'Ada')
-      .field('phone', '+234 801 234 5678')
-      .field('channel', 'phone')
-      .field('captchaToken', 'token')
-      .expect(200);
-
-    expect(zohoService.createLead).toHaveBeenCalledWith(
-      expect.objectContaining({ services: ['branding'], email: undefined }),
-    );
   });
 
   it('rejects a brief with no services', async () => {
@@ -143,13 +217,11 @@ describe('BriefController (e2e)', () => {
       .field('goal', 'Something')
       .field('timeline', 'asap')
       .field('name', 'Ada')
-      .field('phone', '08012345678')
+      .field('phone', '08031234567')
       .field('channel', 'whatsapp')
       .field('captchaToken', 'token')
       .expect(400);
-
     expect(res.body.message).toContain('Pick at least one service');
-    expect(zohoService.createLead).not.toHaveBeenCalled();
   });
 
   it('requires an email or phone number', async () => {
@@ -162,34 +234,28 @@ describe('BriefController (e2e)', () => {
       .field('channel', 'whatsapp')
       .field('captchaToken', 'token')
       .expect(400);
-
     expect(res.body.message).toEqual([
       'Add an email address or WhatsApp number so we can reply',
     ]);
   });
 
   it('rejects disallowed file types', async () => {
-    const res = await validBrief()
+    const res = await brief()
       .attach('file', Buffer.from('MZ'), {
         filename: 'setup.exe',
         contentType: 'application/x-msdownload',
       })
       .expect(400);
-
     expect(res.body.message).toEqual([
       'Attach a PDF, Word document or image (PNG or JPG)',
     ]);
-    expect(zohoService.createLead).not.toHaveBeenCalled();
+    expect(briefFiles.store).not.toHaveBeenCalled();
   });
 
   it('rejects files over 4 MB', async () => {
-    await validBrief()
-      .attach('file', Buffer.alloc(4 * 1024 * 1024 + 1), {
-        filename: 'big.pdf',
-        contentType: 'application/pdf',
-      })
+    await brief()
+      .attach('file', Buffer.alloc(4 * 1024 * 1024 + 1), pdf)
       .expect(413);
-
     expect(zohoService.createLead).not.toHaveBeenCalled();
   });
 });

@@ -4,6 +4,10 @@ import {
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
+import {
+  BriefFilesService,
+  type StoredBriefFile,
+} from '../brief-files/brief-files.service';
 import { EmailService } from '../email/email.service';
 import { ZohoService } from '../zoho/zoho.service';
 import { CreateBriefDto } from './dto/create-brief.dto';
@@ -13,9 +17,11 @@ const SEND_FAILED =
   "We couldn't send your brief just now. Please try again in a moment, or message us on WhatsApp.";
 
 /**
- * Handles "Start a project" briefs: checks them, then records each one as a
- * Lead in Zoho CRM. Zoho's workflow rules send the team alert and the client's
- * confirmation email, so this service sends no email itself.
+ * Handles "Start a project" briefs: checks them, keeps any file in Cloudinary,
+ * and records the brief as a Lead in Zoho CRM (whose workflow rules send the
+ * team email and the client's confirmation). WhatsApp briefs are finished by
+ * the client, who sends a pre-filled message (with the file link) from the
+ * website's thank-you page.
  */
 @Injectable()
 export class BriefService {
@@ -24,6 +30,7 @@ export class BriefService {
   constructor(
     private readonly emailService: EmailService,
     private readonly zohoService: ZohoService,
+    private readonly briefFiles: BriefFilesService,
   ) {}
 
   async submit(
@@ -43,6 +50,30 @@ export class BriefService {
       throw new InternalServerErrorException([SEND_FAILED]);
     }
 
+    const attachment = file
+      ? {
+          name: file.originalname,
+          buffer: file.buffer,
+          mimetype: file.mimetype,
+        }
+      : undefined;
+
+    // 1. The file goes to Cloudinary (private) for an expiring link the client's
+    //    WhatsApp message and the team alert can carry. It's also attached to
+    //    the Zoho lead, so a Cloudinary problem never loses it.
+    let storedFile: StoredBriefFile | undefined;
+    if (attachment && this.briefFiles.enabled) {
+      try {
+        storedFile = await this.briefFiles.store(attachment);
+      } catch (error) {
+        this.logger.error(
+          'Uploading the brief attachment to Cloudinary failed',
+          error,
+        );
+      }
+    }
+
+    // 2. The lead is saved to Zoho CRM before anything else happens.
     try {
       const leadId = await this.zohoService.createLead({
         services: brief.services,
@@ -55,13 +86,8 @@ export class BriefService {
         phone: brief.phone,
         channel: brief.channel,
         pageUri: brief.pageUri,
-        file: file
-          ? {
-              name: file.originalname,
-              buffer: file.buffer,
-              mimetype: file.mimetype,
-            }
-          : undefined,
+        file: attachment,
+        fileLink: storedFile,
       });
       this.logger.log(`Brief recorded as Zoho CRM lead ${leadId}`);
     } catch (error) {
@@ -71,6 +97,9 @@ export class BriefService {
       this.logLostBrief(brief, file);
       throw new InternalServerErrorException([SEND_FAILED]);
     }
+
+    // The file link goes back to the website for the client's WhatsApp message.
+    return { fileUrl: storedFile?.url };
   }
 
   private logLostBrief(
