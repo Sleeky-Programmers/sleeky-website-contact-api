@@ -8,7 +8,6 @@ import * as request from 'supertest';
 import { BriefModule } from './../src/brief/brief.module';
 import { BriefFilesService } from './../src/brief-files/brief-files.service';
 import { EmailService } from './../src/email/email.service';
-import { WhatsAppService } from './../src/whatsapp/whatsapp.service';
 import { ZohoService } from './../src/zoho/zoho.service';
 
 describe('BriefController (e2e)', () => {
@@ -16,7 +15,6 @@ describe('BriefController (e2e)', () => {
   const emailService = { verifyCaptcha: jest.fn(), send: jest.fn() };
   const zohoService = { enabled: true, createLead: jest.fn() };
   const briefFiles = { enabled: true, store: jest.fn() };
-  const whatsapp = { enabled: true, alert: jest.fn() };
   const FILE_URL =
     'https://api.cloudinary.com/v1_1/demo/image/download?signature=abc';
 
@@ -46,8 +44,6 @@ describe('BriefController (e2e)', () => {
       .useValue(zohoService)
       .overrideProvider(BriefFilesService)
       .useValue(briefFiles)
-      .overrideProvider(WhatsAppService)
-      .useValue(whatsapp)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -65,8 +61,6 @@ describe('BriefController (e2e)', () => {
       url: FILE_URL,
       expiresAt: new Date('2026-12-05T00:00:00Z'),
     });
-    whatsapp.enabled = true;
-    whatsapp.alert.mockReset().mockResolvedValue(undefined);
   });
 
   afterAll(() => app.close());
@@ -93,8 +87,6 @@ describe('BriefController (e2e)', () => {
           fileLink: expect.objectContaining({ url: FILE_URL }),
         }),
       );
-      // The client sends the WhatsApp message themselves; no API alert.
-      expect(whatsapp.alert).not.toHaveBeenCalled();
     });
 
     it('still saves the lead (with the file attached in Zoho) if Cloudinary fails', async () => {
@@ -120,48 +112,24 @@ describe('BriefController (e2e)', () => {
     });
   });
 
-  describe("WhatsApp alerts to Sleeky's number", () => {
-    it('alerts our WhatsApp number for email briefs, after saving the lead', async () => {
-      await brief('email')
-        .attach('file', Buffer.from('%PDF-1.4 test'), pdf)
-        .expect(200);
-
-      expect(whatsapp.alert).toHaveBeenCalledWith({
-        name: 'Ada Okafor (Acme)',
-        channel: 'Email',
-        contact: '+2348031234567 / ada@company.com',
-        services: 'Website, Business automation',
-        timeline: 'ASAP',
-        goal: 'We want customers to book online.',
-        fileUrl: FILE_URL,
-      });
-      expect(zohoService.createLead.mock.invocationCallOrder[0]).toBeLessThan(
-        whatsapp.alert.mock.invocationCallOrder[0],
-      );
-    });
-
-    it('alerts it for phone-call briefs too', async () => {
-      await brief('phone').expect(200);
-      expect(whatsapp.alert).toHaveBeenCalledWith(
-        expect.objectContaining({ channel: 'Phone call' }),
-      );
-    });
-
-    it("doesn't fail the brief when the alert fails or isn't set up", async () => {
-      whatsapp.alert.mockRejectedValue(new Error('WhatsApp API 401'));
-      await brief('email').expect(200);
-
-      whatsapp.enabled = false;
-      whatsapp.alert.mockClear();
-      await brief('email').expect(200);
-      expect(whatsapp.alert).not.toHaveBeenCalled();
-    });
-
-    it('sends no alert when the lead could not be saved', async () => {
-      zohoService.createLead.mockRejectedValue(new Error('Zoho down'));
-      await brief('email').expect(500);
-      expect(whatsapp.alert).not.toHaveBeenCalled();
-    });
+  describe('email and phone-call briefs', () => {
+    it.each(['email', 'phone'] as const)(
+      'saves %s briefs to Zoho with the file and its link',
+      async (channel) => {
+        await brief(channel)
+          .attach('file', Buffer.from('%PDF-1.4 test'), pdf)
+          .expect(200, {
+            message: 'Brief sent successfully',
+            fileUrl: FILE_URL,
+          });
+        expect(zohoService.createLead).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel,
+            fileLink: expect.objectContaining({ url: FILE_URL }),
+          }),
+        );
+      },
+    );
   });
 
   describe('phone numbers', () => {
@@ -230,7 +198,7 @@ describe('BriefController (e2e)', () => {
     expect(zohoService.createLead).not.toHaveBeenCalled();
   });
 
-  it('does not touch Zoho, Cloudinary or WhatsApp when the captcha fails', async () => {
+  it('does not touch Zoho or Cloudinary when the captcha fails', async () => {
     emailService.verifyCaptcha.mockRejectedValue(
       new BadRequestException([
         'Captcha verification failed, please try again',
@@ -241,7 +209,6 @@ describe('BriefController (e2e)', () => {
       .expect(400);
     expect(briefFiles.store).not.toHaveBeenCalled();
     expect(zohoService.createLead).not.toHaveBeenCalled();
-    expect(whatsapp.alert).not.toHaveBeenCalled();
   });
 
   it('rejects a brief with no services', async () => {

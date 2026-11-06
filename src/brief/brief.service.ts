@@ -9,25 +9,19 @@ import {
   type StoredBriefFile,
 } from '../brief-files/brief-files.service';
 import { EmailService } from '../email/email.service';
-import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { ZohoService } from '../zoho/zoho.service';
 import { CreateBriefDto } from './dto/create-brief.dto';
-import {
-  ALLOWED_FILE_TYPES,
-  CHANNEL_LABELS,
-  SERVICE_LABELS,
-  TIMELINE_LABELS,
-} from './brief.options';
+import { ALLOWED_FILE_TYPES } from './brief.options';
 
 const SEND_FAILED =
   "We couldn't send your brief just now. Please try again in a moment, or message us on WhatsApp.";
 
 /**
  * Handles "Start a project" briefs: checks them, keeps any file in Cloudinary,
- * records the brief as a Lead in Zoho CRM (whose workflow rules send the team
- * email and the client's confirmation), then sends a WhatsApp alert to Sleeky's
- * WhatsApp number for email and phone-call briefs. WhatsApp briefs are finished by the client,
- * who sends a pre-filled message from the website's thank-you page.
+ * and records the brief as a Lead in Zoho CRM (whose workflow rules send the
+ * team email and the client's confirmation). WhatsApp briefs are finished by
+ * the client, who sends a pre-filled message (with the file link) from the
+ * website's thank-you page.
  */
 @Injectable()
 export class BriefService {
@@ -37,7 +31,6 @@ export class BriefService {
     private readonly emailService: EmailService,
     private readonly zohoService: ZohoService,
     private readonly briefFiles: BriefFilesService,
-    private readonly whatsapp: WhatsAppService,
   ) {}
 
   async submit(
@@ -105,40 +98,8 @@ export class BriefService {
       throw new InternalServerErrorException([SEND_FAILED]);
     }
 
-    // 3. Email and phone-call briefs: a WhatsApp alert to Sleeky's WhatsApp
-    //    number. WhatsApp briefs arrive there when the client sends their
-    //    pre-filled message.
-    if (brief.channel !== 'whatsapp')
-      await this.sendWhatsAppAlert(brief, storedFile);
-
+    // The file link goes back to the website for the client's WhatsApp message.
     return { fileUrl: storedFile?.url };
-  }
-
-  private async sendWhatsAppAlert(
-    brief: CreateBriefDto,
-    storedFile?: StoredBriefFile,
-  ) {
-    if (!this.whatsapp.enabled) {
-      this.logger.warn(
-        'WhatsApp alerts are not set up (CALLMEBOT_API_KEY); skipping',
-      );
-      return;
-    }
-    try {
-      await this.whatsapp.alert({
-        name: brief.company ? `${brief.name} (${brief.company})` : brief.name,
-        channel: CHANNEL_LABELS[brief.channel],
-        contact: [brief.phone, brief.email].filter(Boolean).join(' / '),
-        services: brief.services.map((id) => SERVICE_LABELS[id]).join(', '),
-        timeline: TIMELINE_LABELS[brief.timeline],
-        goal: brief.goal,
-        fileUrl: storedFile?.url,
-      });
-      this.logger.log('WhatsApp alert sent');
-    } catch (error) {
-      // The lead is already in Zoho and its email workflow runs; the alert is extra.
-      this.logger.error('WhatsApp alert failed', error);
-    }
   }
 
   private logLostBrief(
