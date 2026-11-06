@@ -27,7 +27,11 @@ export class BriefController {
     @UploadedFile() file: Express.Multer.File | undefined,
     @Ip() ip: string,
   ) {
-    await this.briefService.submit(brief, file, ip);
-    return { message: 'Brief sent successfully' };
+    const { fileUrl } = await this.briefService.submit(brief, file, ip);
+    // fileUrl: private, expiring link to the attachment, for the client's WhatsApp message.
+    return {
+      message: 'Brief sent successfully',
+      ...(fileUrl ? { fileUrl } : {}),
+    };
   }
 }
